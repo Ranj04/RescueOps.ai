@@ -1,0 +1,15 @@
+# Full local-dev dependency set (Track A pipeline + old FastAPI surface).
+# Install with:  pip install -r requirements-local.txt
+#
+# requirements.txt is intentionally lean: on EdgeOne Makers it is the deploy
+# manifest for BOTH the cloud-function bundle (hard size limit — crewai alone
+# blows it) and the agent bundle (crewai etc. are preinstalled on the agent
+# server image and purged from uploads anyway). Heavy deps live here instead.
+-r requirements.txt
+crewai
+litellm
+openai
+pydantic
+fastapi
+uvicorn[standard]
+traceloop-sdk

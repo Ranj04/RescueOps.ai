@@ -91,6 +91,8 @@ def test_missing_gateway_setting_fails_clearly(monkeypatch) -> None:
         "MAKERS_MODELS_KEY",
         "LLM_PRIMARY_MODEL",
         "LLM_FALLBACK_MODEL",
+        "AI_GATEWAY_BASE_URL",
+        "AI_GATEWAY_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -101,6 +103,23 @@ def test_missing_gateway_setting_fails_clearly(monkeypatch) -> None:
         assert "Missing LLM_BASE_URL" in str(error)
     else:
         raise AssertionError("missing Makers configuration should fail")
+
+
+def test_injected_gateway_credentials_are_used(monkeypatch) -> None:
+    """A5: in the Makers runtime LLM_BASE_URL / MAKERS_MODELS_KEY are absent — the
+    platform injects AI_GATEWAY_BASE_URL / AI_GATEWAY_API_KEY instead (RECON-B0 Q5)."""
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("MAKERS_MODELS_KEY", raising=False)
+    monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://ai-gateway.edgeone.link/v1")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "injected-runtime-key")
+    monkeypatch.setenv("LLM_PRIMARY_MODEL", "@makers/deepseek-v4-flash")
+    monkeypatch.setenv("LLM_FALLBACK_MODEL", "@makers/minimax-m2.7")
+
+    llm_client.begin_model_run("INC-INJECTED")
+    model = llm_client.build_llm()
+
+    assert model.api_key == "injected-runtime-key"
+    assert model.model == "openai/@makers/deepseek-v4-flash"
 
 
 def test_commander_uses_the_central_gateway_client(monkeypatch) -> None:

@@ -54,6 +54,20 @@ def _required_setting(name: str) -> str:
     return value
 
 
+def _gateway_setting(name: str, injected: str) -> str:
+    """Read a gateway credential, preferring the local-dev var but falling back to
+    the credential the Makers runtime auto-injects in production (RECON-B0 Q5:
+    AI_GATEWAY_BASE_URL / AI_GATEWAY_API_KEY are present at runtime with zero
+    console setup; LLM_BASE_URL / MAKERS_MODELS_KEY are the local-dev names)."""
+    value = os.environ.get(name, "").strip() or os.environ.get(injected, "").strip()
+    if not value:
+        raise LLMConfigurationError(
+            f"Missing {name} (or platform-injected {injected}); copy .env.template "
+            f"to .env and configure the Makers gateway"
+        )
+    return value
+
+
 def _litellm_model(model: str) -> str:
     return model if model.startswith("openai/") else f"openai/{model}"
 
@@ -204,8 +218,8 @@ def build_llm(temperature: float = 0.2) -> GatewayLLM:
     if state is None:
         state = _RunState(incident_id="unknown")
         _run_state.set(state)
-    base_url = _required_setting("LLM_BASE_URL")
-    api_key = _required_setting("MAKERS_MODELS_KEY")
+    base_url = _gateway_setting("LLM_BASE_URL", "AI_GATEWAY_BASE_URL")
+    api_key = _gateway_setting("MAKERS_MODELS_KEY", "AI_GATEWAY_API_KEY")
     primary_model = _required_setting("LLM_PRIMARY_MODEL")
     fallback_model = _required_setting("LLM_FALLBACK_MODEL")
     # crewai 1.x structured outputs (Task.output_pydantic) route through

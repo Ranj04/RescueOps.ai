@@ -25,9 +25,13 @@ import time
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-_PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PARENT_DIR not in sys.path:
-    sys.path.insert(0, _PARENT_DIR)
+# EdgeOne loads index.py as a top-level module without package context; only
+# the bundle root is importable by default, so both dirs go on sys.path.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PARENT_DIR = os.path.dirname(_THIS_DIR)
+for _d in (_THIS_DIR, _PARENT_DIR):
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
 
 from _storage import Storage  # noqa: E402
 from _stub import PRE_APPROVAL, POST_APPROVAL, POST_DENIAL  # noqa: E402

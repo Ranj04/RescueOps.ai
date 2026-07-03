@@ -1,8 +1,2 @@
-crewai
-litellm
-openai
+httpx
 python-dotenv
-pydantic
-fastapi
-uvicorn[standard]
-traceloop-sdk

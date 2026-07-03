@@ -217,12 +217,18 @@ Run an incident end-to-end locally through the pipeline (Track A):
 python main.py --incident INC-001-checkout-db-pool
 ```
 
-Run the frontend dev server (Track B):
+Run the full local stack (frontend + cloud functions + agents) with one command:
 
 ```bash
 npm install
 npm run dev
 ```
+
+That runs `edgeone makers dev` (requires the [EdgeOne CLI](https://www.npmjs.com/package/edgeone)
+and `edgeone login`). Open http://localhost:5173 — `/api` is served by the local
+`cloud-functions/` handler, not the deployed project.
+
+UI-only (Vite, proxying `/api` to the deployed project) is `npm run dev:ui`.
 
 The production backend is the Makers cloud function in `cloud-functions/`; it currently
 serves the day-one stub event stream and is wired to the real pipeline at integration.

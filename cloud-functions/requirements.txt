@@ -1,3 +1,0 @@
-# Cloud functions are stdlib-only: storage comes from the platform context.
-# This file exists so the function bundle does NOT inherit the repo-root
-# requirements.txt (crewai/fastapi belong to the local pipeline, not to api/).

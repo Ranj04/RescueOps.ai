@@ -236,6 +236,36 @@ ranjiv.jithendran@gmail.com. Observed deploy flow: `edgeone makers create hello-
 
 ---
 
+## B1 bring-up addenda (observed 2026-07-03, decision-affecting)
+
+1. **Storage requires an agents dir.** The builder injects `context.agent.store`
+   into cloud functions ONLY when `agents/` exists ("Detected agents directory —
+   context.agent.store will be injected"). Without it, puts/appends silently no-op.
+   → `agents/ping/index.py` exists as deploy plumbing + storage healthcheck.
+2. **Conversation ids: 6–36 chars, no ':'** — violations fail SILENTLY (append
+   returns nothing, conversation stays empty). Event logs use
+   `evt-<sha1(incident_id)[:16]>` (see `_storage._cid`). KV keys DO accept colons.
+3. **`get_messages` caps `limit` at 100** (`MemoryValidationError` above 100).
+   Fine for demo incidents (~25 events); pagination unproven.
+4. **Agent-side store facade differs**: `context.store` in agents is
+   ConversationMemory (append_message/get_messages — no put/get); the generic
+   put/get facade exists only on `self.context.agent.store` in cloud functions.
+5. **requirements.txt is the deploy manifest for BOTH bundles.** Function bundles
+   hard-fail over ~200 MB (crewai alone → 461 MB → Deploy Failed); a per-dir
+   cloud-functions/requirements.txt did NOT exclude root deps. Agent server
+   images preinstall the heavy stack (builder excludes/purges "server-image
+   packages"). → root requirements.txt is lean (httpx, python-dotenv); the full
+   local-dev set moved to requirements-local.txt.
+6. **.env values are baked into bundles at build time** (setdefault lines in the
+   platform harness) — env changes need a redeploy, matching the docs.
+7. **Project types matter:** the console-created project (rescueops-dpj9utykdvs3,
+   git-connected) accepts CLI deployments ("Deploy Success") but never serves
+   them — production tracks the GitHub repo. CLI-created upload projects
+   (hello-recon) serve CLI deploys immediately. Deploying to the git project =
+   push to GitHub main.
+8. Stale local build cache can mask requirement changes — `rm -rf
+   .edgeone/cloud-functions .edgeone/agent-python` forces a clean bundle.
+
 ## Deployment-shape proposal (to lock at the human gate) — updated from observation
 
 - Incident runner = **agent runtime** (`async def handler(context)`), one conversation

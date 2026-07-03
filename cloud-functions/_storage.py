@@ -17,11 +17,23 @@ Layout in the store:
   key "stub:{incident_id}"          -> STUB replay state (deleted with the stub)
 """
 
+import hashlib
 import json
 import time
 from datetime import datetime, timezone
 
-EVENT_LIMIT = 1000  # per-incident read ceiling; demo incidents emit ~20
+EVENT_LIMIT = 100  # get_messages hard-caps limit at 100 (MemoryValidationError above); demo incidents emit ~20
+
+
+def _cid(incident_id):
+    """Conversation id for an incident's event log.
+
+    Conversation ids must be 6-36 chars and reject ':' SILENTLY (appends
+    return nothing and the conversation stays empty — observed in B1
+    bring-up), and raw incident ids can exceed 36 chars. A deterministic
+    hash sidesteps both.
+    """
+    return "evt-" + hashlib.sha1(incident_id.encode()).hexdigest()[:16]
 
 
 def _now_iso() -> str:
@@ -58,14 +70,14 @@ class Storage:
             "payload": payload,
             "trace_id": trace_id,
         }
-        self._store.append_message(f"evt:{incident_id}", "user", json.dumps(event))
+        self._store.append_message(_cid(incident_id), "user", json.dumps(event))
         return event
 
     def read_events(self, incident_id, since=0):
         """Events with seq > since, seq stamped from stable message position."""
         try:
             messages = self._store.get_messages(
-                f"evt:{incident_id}", limit=EVENT_LIMIT, order="asc"
+                _cid(incident_id), limit=EVENT_LIMIT, order="asc"
             ) or []
         except Exception:
             return []
