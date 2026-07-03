@@ -8,8 +8,6 @@ machine itself, but pipeline.py never previously invoked.
 """
 from __future__ import annotations
 
-import pytest
-
 import pipeline
 from events import clear_events, list_events
 from schemas import (
@@ -175,6 +173,41 @@ def test_retry_after_failed_verification_can_pause_for_a_second_approval(monkeyp
     events = list_events("INC-004-autoscaler-underprovisioned")
     assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
     assert events[-1]["type"] == "incident_resolved"
+
+
+def test_paused_run_resumes_from_persisted_state_after_process_restart(monkeypatch) -> None:
+    """A4 verify: the awaiting_approval RunResult round-trips through JSON — the
+    exact shape a process restart forces (persist on pause, revalidate on resume) —
+    and the restored state machine continues from awaiting_approval, not the start."""
+    from schemas import RunResult
+
+    _configure(monkeypatch)
+    clear_events("INC-001-checkout-db-pool")
+    _script(monkeypatch, {
+        TriageReport: _TRIAGE_SEV3,
+        CommanderDecision: CommanderDecision(move="fast_path", rationale="SEV-3, skip diagnosis"),
+        RemediationPlan: _PLAN_RISKY,
+        VerificationReport: _VERIFY_PASS,
+        PostmortemReport: _POSTMORTEM,
+    })
+
+    paused = pipeline.run_until_approval("INC-001-checkout-db-pool")
+    assert paused.status == pipeline.STATUS_AWAITING
+
+    # Simulate the process dying and a new one restoring the run from storage.
+    restored = RunResult.model_validate_json(paused.model_dump_json())
+
+    resolved = pipeline.resume_after_approval(
+        restored, ApprovalDecision(approved=True, approver="human-ui", note="approved after restart"),
+    )
+
+    assert resolved.status == pipeline.STATUS_RESOLVED
+    assert resolved.run_id == paused.run_id
+    events = list_events("INC-001-checkout-db-pool")
+    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+    types = [e["type"] for e in events]
+    assert types.count("incident_opened") == 1  # resumed, not restarted
+    assert "approval_granted" in types and types[-1] == "incident_resolved"
 
 
 def test_retry_cap_reached_escalates_instead_of_looping_forever(monkeypatch) -> None:
