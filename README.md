@@ -146,7 +146,7 @@ architecture above is not yet fully shipped.
 | Track A repository audit | Complete |
 | IT-ops scenarios and rubric extracted into a pack | Complete |
 | Central `llm_client.py` boundary | Complete |
-| Makers primary/fallback adapter and fallback event | Implemented; live credential gate pending |
+| Makers primary/fallback adapter and fallback event | Verified live: 5/5 it-ops scenarios end-to-end on the gateway, clean structured outputs, model gate confirmed (deepseek-v4-flash / minimax-m2.7) |
 | Commander factory and `policy.json` state-machine core | Live-wired into `pipeline.py`; Commander consulted at every `commander_decides` point, illegal moves overruled, retries capped |
 | Event envelope, validation, and gapless local sequencing | Implemented and emitted end-to-end by `pipeline.py`; KV write path pending (Track B) |
 | Makers session/KV persistence | Pending Track B recon and integration |
