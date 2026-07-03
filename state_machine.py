@@ -192,11 +192,14 @@ class IncidentStateMachine:
         )
         return move
 
-    def after_verification(
-        self,
-        recovered: bool,
-        decision: CommanderDecision | None = None,
-    ) -> str:
+    def after_verification(self, recovered: bool) -> str:
+        """Record the code-determined pass/fail outcome (not a Commander decision).
+
+        Transitions to "postmortem" on pass, or "verification_decision" on fail — the
+        latter is where the Commander is actually consulted (see
+        `after_verification_decision`); the legal retry/escalate moves only exist once
+        we're in that state, so the decision must be queried after this call returns.
+        """
         if self.current_state != "verification":
             raise RuntimeError("after_verification requires the verification state")
         if recovered:
@@ -214,7 +217,18 @@ class IncidentStateMachine:
             event_type="verification_failed",
             payload={"summary": "Recovery verification failed."},
         )
-        self.apply_move(None, forced_move="verification_failed")
+        return self.apply_move(None, forced_move="verification_failed")
+
+    def after_verification_decision(
+        self,
+        decision: CommanderDecision | None = None,
+    ) -> str:
+        """Apply the Commander's retry-vs-escalate choice; only legal after a failed
+        verification has moved the machine into "verification_decision"."""
+        if self.current_state != "verification_decision":
+            raise RuntimeError(
+                "after_verification_decision requires the verification_decision state"
+            )
         cap = self.policy.retry_caps.get("verification", 0)
         retries = self.snapshot.retry_counts.get("verification", 0)
         requested = decision.move if decision else None

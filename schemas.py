@@ -69,34 +69,50 @@ class PostmortemReport(BaseModel):
 class RunResult(BaseModel):
     """The full state of an incident run at whatever stage it has reached.
 
-    Progressive autonomy means a run finishes in one of two ways:
+    The Commander's policy-bound decisions mean a run finishes in one of three ways:
       - status="resolved"          — fully done; verification + postmortem present.
                                       Reached AUTONOMOUSLY when remediation produced
                                       no risky actions, or after a human decides on
-                                      the risky ones.
+                                      the risky ones and verification passes.
       - status="awaiting_approval" — safe actions have already been auto-executed
                                       (see `executed_safe`); one or more risky
-                                      actions are pending a human decision.
-                                      `approval`/`verification`/`postmortem` are null.
+                                      actions are pending a human decision. This can
+                                      happen a second time if a failed-verification
+                                      retry proposes new risky actions — approval is
+                                      policy-forced and the Commander cannot bypass it.
+      - status="escalated"         — the Commander (or the retry cap) escalated to a
+                                      human instead of continuing: either diagnosis
+                                      confidence was too low to dispatch remediation,
+                                      or verification failed and the retry cap (per
+                                      policy.json) was reached. Terminal; no postmortem.
+    `diagnosis` is null when triage fast-pathed a low-severity incident straight to
+    remediation. `remediation` is null when diagnosis escalated before remediation ran.
+    `state_snapshot` is the serialized IncidentStateMachine (see state_machine.py) —
+    opaque to callers, required by `resume_after_approval` to continue the same run.
     """
     run_id: str = Field(description="UUID for this pipeline run")
     incident_id: str = Field(description="The incident that was processed")
-    status: str = Field(description='"awaiting_approval" or "resolved"')
+    status: str = Field(description='"awaiting_approval", "resolved", or "escalated"')
     triage: TriageReport
-    diagnosis: DiagnosisReport
-    remediation: RemediationPlan
+    diagnosis: Optional[DiagnosisReport] = Field(
+        default=None, description="Null when triage fast-pathed past deep diagnosis"
+    )
+    remediation: Optional[RemediationPlan] = Field(
+        default=None, description="Null when the incident escalated before remediation ran"
+    )
     executed_safe: list[RemediationAction] = Field(
         default_factory=list,
-        description="Safe actions auto-executed without a human approval gate",
+        description="Safe actions auto-executed without a human approval gate, from the latest remediation cycle",
     )
     approval: Optional[ApprovalDecision] = Field(
         default=None,
         description="Null until a risky-action decision is made (auto when no risky actions)",
     )
     verification: Optional[VerificationReport] = Field(
-        default=None, description="Null until the run is resolved"
+        default=None, description="Null until a verification attempt has run"
     )
     postmortem: Optional[PostmortemReport] = Field(
         default=None, description="Null until the run is resolved"
     )
     chaos_config: Optional[Dict[str, Any]] = Field(default=None, description="Chaos parameters injected for this run, if any")
+    state_snapshot: str = Field(description="Serialized IncidentStateMachine snapshot for resuming this run")

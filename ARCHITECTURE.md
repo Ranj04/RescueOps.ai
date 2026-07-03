@@ -60,8 +60,8 @@ evaluated, live."
 │                                     +1 real tool: primary:         │
 │                                     NVD CVE fetch) @makers/deep-   │
 │                                                    seek-v4-flash   │
-│                                                    fallback: bound │
-│                                                    Anthropic key   │
+│                                                    fallback:       │
+│                                                    minimax-m2.7    │
 │  STATE: Makers KV/Blob — event log (append-only), incidents,       │
 │         eval cache, chat sessions (stretch)                        │
 │  OBSERVABILITY: Makers built-in end-to-end tracing (demo beat)     │
@@ -265,7 +265,9 @@ Makers primitives underneath — with DEPTH COMMITMENTS (each must be evidenced,
 |-------------------------|---------------------------------------------------------------|
 | Agent runtime           | Hosts Commander + crew in framework-native (CrewAI) idiom     |
 | Model gateway           | ALL LLM calls; primary @makers/deepseek-v4-flash (free quota),|
-|                         | fallback = bound Anthropic key; failover is a live demo beat  |
+|                         | fallback = @makers/minimax-m2.7 (A2 gate, 2026-07-03: both    |
+|                         | verified live; a bound Anthropic key can replace the fallback |
+|                         | later — it is only a model string); failover is a demo beat   |
 | Memory / session store  | THE pipeline's memory: paused state between run_until_approval|
 |                         | and resume_after_approval persists in context.store; CrewAI   |
 |                         | memory binds to it (recon-gated; KV fallback documented if    |
@@ -377,3 +379,8 @@ dashboard (incl. web approval panel), deployed URL.
    management, safety controls, tool access. This is the product framing.
 7. On-call SMS channel (§6A): Twilio, one number, YES/NO grammar, event-consumer design,
    stretch #1, never in the untouchable set (external dependency). Track A untouched.
+8. Model assignment (A2 human gate, 2026-07-03): primary @makers/deepseek-v4-flash,
+   fallback @makers/minimax-m2.7 — 5/5 it-ops scenarios end-to-end on the live gateway,
+   25/25 structured artifacts parsed cleanly (instructor JSON mode; the gateway's
+   thinking-mode models reject forced tool_choice), 55–102 s/incident, zero fallback
+   activations. Known quality trait: over-triages severity (2/5 SEV-2s called SEV-1).
