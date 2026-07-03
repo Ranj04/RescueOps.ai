@@ -56,6 +56,35 @@ def test_fallback_circuit_is_shared_across_models(monkeypatch) -> None:
     assert len(list_events("INC-CHAOS")) == 1
 
 
+def test_structured_output_routes_through_json_mode_with_failover(monkeypatch) -> None:
+    from schemas import CommanderDecision
+
+    _configure(monkeypatch)
+    calls = []
+
+    def fake_structured(llm, response_model, messages):
+        calls.append(llm.model)
+        if llm.model == "openai/@makers/primary":
+            raise ConnectionError("primary unavailable")
+        return response_model(move="fast_path", rationale="Structured fallback works.")
+
+    monkeypatch.setattr(llm_client, "_structured_completion", fake_structured)
+    clear_events()
+    llm_client.begin_model_run("INC-STRUCTURED")
+    model = llm_client.build_llm()
+
+    out = model.call(
+        [{"role": "user", "content": "choose"}],
+        response_model=CommanderDecision,
+    )
+
+    assert isinstance(out, CommanderDecision)
+    assert out.move == "fast_path"
+    assert calls == ["openai/@makers/primary", "openai/@makers/fallback"]
+    events = list_events("INC-STRUCTURED")
+    assert [e["type"] for e in events] == ["model_fallback"]
+
+
 def test_missing_gateway_setting_fails_clearly(monkeypatch) -> None:
     for name in (
         "LLM_BASE_URL",

@@ -7,8 +7,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+import instructor
 from crewai import LLM
 from dotenv import load_dotenv
+from litellm import acompletion, completion
 from pydantic import PrivateAttr
 
 from events import append_event
@@ -54,6 +56,41 @@ def _required_setting(name: str) -> str:
 
 def _litellm_model(model: str) -> str:
     return model if model.startswith("openai/") else f"openai/{model}"
+
+
+def _as_messages(prompt: Any) -> list[dict[str, str]]:
+    if isinstance(prompt, str):
+        return [{"role": "user", "content": prompt}]
+    return list(prompt)
+
+
+def _structured_kwargs(llm: LLM, response_model: type, messages: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": llm.model,
+        "messages": _as_messages(messages),
+        "response_model": response_model,
+        "api_key": llm.api_key,
+        "api_base": getattr(llm, "base_url", None),
+        "max_retries": 2,
+    }
+    temperature = getattr(llm, "temperature", None)
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    return kwargs
+
+
+# Structured outputs use instructor's JSON mode (schema in prompt +
+# response_format json_object), NOT its default TOOLS mode: the gateway's
+# thinking-mode models reject forced tool_choice (deepseek 400s, minimax
+# ignores it), while JSON mode was verified against both.
+def _structured_completion(llm: LLM, response_model: type, messages: Any) -> Any:
+    client = instructor.from_litellm(completion, mode=instructor.Mode.JSON)
+    return client.chat.completions.create(**_structured_kwargs(llm, response_model, messages))
+
+
+async def _astructured_completion(llm: LLM, response_model: type, messages: Any) -> Any:
+    client = instructor.from_litellm(acompletion, mode=instructor.Mode.JSON)
+    return await client.chat.completions.create(**_structured_kwargs(llm, response_model, messages))
 
 
 class GatewayLLM(LLM):
@@ -115,26 +152,49 @@ class GatewayLLM(LLM):
             return True
         return False
 
+    @staticmethod
+    def _pop_structured_request(args: tuple, kwargs: dict) -> tuple[type | None, Any]:
+        """Intercept crewai's response_model so structured outputs run through
+        our instructor JSON-mode path with explicit gateway credentials, instead
+        of crewai's InternalInstructor (which calls litellm bare, in TOOLS mode)."""
+        response_model = kwargs.pop("response_model", None)
+        messages = args[0] if args else kwargs.get("messages")
+        return response_model, messages
+
     def call(self, *args: Any, **kwargs: Any) -> str | Any:
+        response_model, messages = self._pop_structured_request(args, kwargs)
         if self._state.fallback_active:
+            if response_model is not None:
+                return _structured_completion(self._fallback_llm, response_model, messages)
             return self._fallback_llm.call(*args, **kwargs)
         try:
             if self._primary_is_forced_down():
                 raise ConnectionError("Primary model disabled by chaos configuration")
+            if response_model is not None:
+                return _structured_completion(self, response_model, messages)
             return super().call(*args, **kwargs)
         except Exception as error:
             self._activate_fallback(error)
+            if response_model is not None:
+                return _structured_completion(self._fallback_llm, response_model, messages)
             return self._fallback_llm.call(*args, **kwargs)
 
     async def acall(self, *args: Any, **kwargs: Any) -> str | Any:
+        response_model, messages = self._pop_structured_request(args, kwargs)
         if self._state.fallback_active:
+            if response_model is not None:
+                return await _astructured_completion(self._fallback_llm, response_model, messages)
             return await self._fallback_llm.acall(*args, **kwargs)
         try:
             if self._primary_is_forced_down():
                 raise ConnectionError("Primary model disabled by chaos configuration")
+            if response_model is not None:
+                return await _astructured_completion(self, response_model, messages)
             return await super().acall(*args, **kwargs)
         except Exception as error:
             self._activate_fallback(error)
+            if response_model is not None:
+                return await _astructured_completion(self._fallback_llm, response_model, messages)
             return await self._fallback_llm.acall(*args, **kwargs)
 
 
@@ -148,6 +208,13 @@ def build_llm(temperature: float = 0.2) -> GatewayLLM:
     api_key = _required_setting("MAKERS_MODELS_KEY")
     primary_model = _required_setting("LLM_PRIMARY_MODEL")
     fallback_model = _required_setting("LLM_FALLBACK_MODEL")
+    # crewai 1.x structured outputs (Task.output_pydantic) route through
+    # InternalInstructor, which invokes litellm's bare completion() with only the
+    # model name — instance api_key/base_url never reach it, so litellm reads
+    # these env vars instead. Publishing the gateway credentials here keeps that
+    # leaf call on the Makers gateway without a second config path.
+    os.environ.setdefault("OPENAI_API_KEY", api_key)
+    os.environ.setdefault("OPENAI_API_BASE", base_url)
     return GatewayLLM(
         model=_litellm_model(primary_model),
         base_url=base_url,
