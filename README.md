@@ -153,9 +153,10 @@ architecture above is not yet fully shipped.
 | Production dashboard integration | Pending |
 | SMS, Ops Floor, sec-ops pack | Stretch; not yet shipped |
 
-Legacy TrueFoundry, Traceloop, SQLite, Railway, Streamlit, and nested CrewAI scaffold
-files remain from the prior prototype. They are not the target architecture and will be
-removed or replaced only in their gated migration phases.
+The prior-prototype files (TrueFoundry `config.py`, the Streamlit app, the old FastAPI
+`api/` surface, the standalone `frontend/`, and the nested CrewAI scaffold) have been
+removed. The tree now holds only the target Makers architecture: the Track A model/agent
+layer, the Track B `cloud-functions/` and `web/` surface, and the shared contract docs.
 
 ## Repository map
 
@@ -167,14 +168,19 @@ removed or replaced only in their gated migration phases.
 | `TRACK-B.md` | Makers platform and frontend execution plan |
 | `DEMO-SCRIPT.md` | Three-minute demo beats and fallback plan |
 | `agents.py` | Current five specialist Agent factories |
-| `pipeline.py` | Progressive-autonomy pipeline |
+| `pipeline.py` | Progressive-autonomy pipeline (state machine + Commander) |
+| `state_machine.py` | Policy-parameterized incident state machine |
+| `policy.json` / `policy.py` | Commander legal-move policy and its boot-time validator |
 | `llm_client.py` | Single Makers gateway model boundary |
 | `events.py` | Track A event production helper |
 | `schemas.py` | Structured Pydantic artifacts |
+| `incidents.py` | Pack loader (scenarios + rubric) |
+| `main.py` | Local incident-runner CLI (Track A verification) |
 | `packs/it-ops/` | IT-ops scenarios and severity rubric |
-| `api/` | Current FastAPI surface; Track B migration area |
-| `frontend/` | Current React interface; Track B migration area |
-| `tests/` | Track A refactor and model-failover tests |
+| `cloud-functions/` | Makers cloud-function surface (Track B; day-one stub event stream) |
+| `web/` + `index.html` | React interface served by root Vite (Track B) |
+| `chaos.py` / `evaluation.py` | Track B chaos console and eval board (awaiting integration) |
+| `tests/` | Track A policy, refactor, and model-failover tests |
 
 ## Local setup
 
@@ -205,21 +211,21 @@ LLM_FALLBACK_MODEL=<bound fallback model ID>
 
 Never commit `.env` or paste the key into an issue, log, or chat.
 
-Run the current backend and frontend:
+Run an incident end-to-end locally through the pipeline (Track A):
 
 ```bash
-./dev.sh
+python main.py --incident INC-001-checkout-db-pool
 ```
 
-Or run them separately:
+Run the frontend dev server (Track B):
 
 ```bash
-uvicorn api.server:app --reload --port 8000
-
-cd frontend
 npm install
 npm run dev
 ```
+
+The production backend is the Makers cloud function in `cloud-functions/`; it currently
+serves the day-one stub event stream and is wired to the real pipeline at integration.
 
 Run tests:
 

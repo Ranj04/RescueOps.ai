@@ -119,7 +119,7 @@ def main() -> None:
     args = parser.parse_args()
 
     print(f"\nRescueOps  —  incident: {args.incident}")
-    print("Routing through TrueFoundry AI Gateway  (grok-3 primary)\n")
+    print("Routing through the EdgeOne Makers model gateway\n")
 
     callback = (
         (lambda plan: ApprovalDecision(
