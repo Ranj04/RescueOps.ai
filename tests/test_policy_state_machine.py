@@ -112,12 +112,15 @@ def test_verification_retries_once_then_escalates() -> None:
         move="retry_remediation",
         rationale="One bounded retry may recover the service",
     )
-    assert machine.after_verification(False, retry) == "retry_remediation"
+    assert machine.after_verification(False) == "verification_failed"
+    assert machine.current_state == "verification_decision"
+    assert machine.after_verification_decision(retry) == "retry_remediation"
     assert machine.snapshot.retry_counts["verification"] == 1
     assert machine.current_state == "remediation"
 
     machine.after_remediation([])
-    assert machine.after_verification(False, retry) == "escalate"
+    assert machine.after_verification(False) == "verification_failed"
+    assert machine.after_verification_decision(retry) == "escalate"
     assert machine.snapshot.retry_counts["verification"] == 1
     assert machine.current_state == "escalated"
     assert list_events("INC-RETRY")[-1]["type"] == "commander_overruled"
