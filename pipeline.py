@@ -158,6 +158,11 @@ def _commander_prompt(context: dict) -> str:
         "one-sentence rationale (it becomes your speech bubble on the Ops Floor).\n\n"
         f"Current state: {context['current_state']}\n"
         f"Legal moves: {context['legal_moves']}\n\n"
+        "Move intent (from the policy): fast_path skips deep diagnosis and is meant "
+        "only for low-severity incidents with no customer impact; deep_diagnosis is "
+        "the default for anything customer-facing. escalate_to_human is for "
+        "low-confidence diagnoses. retry_remediation is one bounded retry after a "
+        "failed verification; escalate hands the incident to a human.\n\n"
         f"Latest specialist output:\n{json.dumps(context['latest_specialist_output'], indent=2)}"
     )
 
