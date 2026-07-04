@@ -107,9 +107,16 @@ def test_handler_pauses_then_resumes_across_two_invocations(monkeypatch) -> None
     # trace_id was stamped from context.run_id on every published event.
     assert first[0]["events"], "events should have been published"
     assert all(e["trace_id"] == "run-aaa" for e in first[0]["events"])
-    # The paused snapshot was persisted to the store for a later invocation.
+    # The paused snapshot was persisted on the REQUEST conversation for a later
+    # invocation — never on the event conversation /api/events reads.
     assert any(json.loads(m["content"]).get("kind") == "rescueops.snapshot"
                for m in store.messages[incident_id])
+    # Events published to Track B's evt-<sha1> conversation (B3 reconciliation).
+    evt_cid = incident_handler._event_cid(incident_id)
+    published = [json.loads(m["content"]) for m in store.messages[evt_cid]]
+    assert published and all(e["trace_id"] == "run-aaa" for e in published)
+    assert sum(e["type"] == "approval_requested" for e in published) == 1
+    pre_pause_count = len(published)
 
     # --- Invocation 2: a SEPARATE invocation (new run id) approves and resumes. ---
     _script(monkeypatch, {
@@ -132,6 +139,18 @@ def test_handler_pauses_then_resumes_across_two_invocations(monkeypatch) -> None
     assert second[0]["status"] == "resolved"
     assert second[0]["run_id"] == first[0]["run_id"]  # same run resumed, not restarted
     assert second[0]["result"]["postmortem"] is not None
+
+    # Warm-container dedup: the resume published ONLY its own new events — the
+    # pre-pause ones were not re-published even though both invocations shared
+    # this process's in-memory event log.
+    published = [json.loads(m["content"]) for m in store.messages[evt_cid]]
+    resumed = published[pre_pause_count:]
+    assert resumed, "resume phase should publish new events"
+    assert sum(e["type"] == "approval_requested" for e in published) == 1
+    assert sum(e["type"] == "incident_resolved" for e in published) == 1
+    # /api/approval is the single writer of approval events — the pipeline's own
+    # copy is filtered out of the published stream.
+    assert not any(e["type"] in ("approval_granted", "approval_denied") for e in published)
 
 
 def test_handler_rejects_approval_without_a_paused_incident(monkeypatch) -> None:

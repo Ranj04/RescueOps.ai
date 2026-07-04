@@ -1,0 +1,9 @@
+{
+  "accent": "#ffb000",
+  "racks": [
+    { "id": "logs", "label": "LOG PIPELINE", "icon": "🪵" },
+    { "id": "metrics", "label": "METRICS TSDB", "icon": "📈" },
+    { "id": "deploys", "label": "DEPLOY LEDGER", "icon": "🚀" },
+    { "id": "gateway", "label": "MODEL GATEWAY", "icon": "🛰" }
+  ]
+}

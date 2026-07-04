@@ -47,7 +47,7 @@ export function Timeline({ events }) {
     return (
       <div className="panel timeline">
         <div className="panel-title">EVENT STREAM</div>
-        <div className="empty">No events yet — start a replay or wait for the crew.</div>
+        <div className="empty">No events yet — run an incident and the crew takes it from there.</div>
       </div>
     );
   }
@@ -141,7 +141,10 @@ export function EvalBoard({ summary, note, onRun }) {
       <div className="panel-title">EVAL BOARD</div>
       {summary ? (
         <div className="eval-grid">
-          {Object.entries(summary.scores || summary).map(([k, v]) => (
+          {Object.entries({
+            ...(summary.incidents_run != null ? { incidents_run: summary.incidents_run } : {}),
+            ...(summary.aggregate || summary.scores || summary),
+          }).map(([k, v]) => (
             <div key={k} className="eval-cell">
               <div className="eval-k">{k}</div>
               <div className="eval-v">{typeof v === "number" ? v.toFixed(2) : String(v)}</div>

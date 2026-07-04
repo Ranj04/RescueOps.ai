@@ -14,7 +14,6 @@ Layout in the store:
   key "packs"                       -> list of pack names (domain switcher)
   key "chaos"                       -> chaos flag dict
   key "eval:{pack}"                 -> cached eval summary
-  key "stub:{incident_id}"          -> STUB replay state (deleted with the stub)
 """
 
 import hashlib

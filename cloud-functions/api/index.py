@@ -13,9 +13,11 @@ the whole ARCHITECTURE §4 surface:
   GET  /api/chaos                      -> current chaos flags
   POST /api/chaos                      -> set flags (+ chaos event if incident_id)
   GET  /api/eval?pack=it-ops           -> cached eval summary or null
-  POST /api/eval                       -> real scoring lands in Phase B2
-  POST /api/stub/start                 -> STUB: begin canned replay (B3: delete)
-  POST /api/stub/tick                  -> STUB: append events now due (B3: delete)
+  POST /api/eval                       -> cache {pack, summary} (scored by the
+                                          /eval agent; this endpoint only persists)
+  POST /api/sms/inbound                -> Twilio webhook (§6A): signature +
+                                          allowlist, YES/NO grammar, SAME
+                                          approval writer as the web panel
 """
 
 import json
@@ -34,9 +36,49 @@ for _d in (_THIS_DIR, _PARENT_DIR):
         sys.path.insert(0, _d)
 
 from _storage import Storage  # noqa: E402
-from _stub import PRE_APPROVAL, POST_APPROVAL, POST_DENIAL  # noqa: E402
+from _sms import parse_reply, twiml, validate_twilio_signature  # noqa: E402
 
 CHAOS_DEFAULTS = {"disable_sources": [], "break_primary_model": False, "kill_real_feed": False}
+
+
+def find_pending_approval(storage, incident_id):
+    """The latest approval_requested not yet answered, or None."""
+    pending = None
+    for event in storage.read_events(incident_id):
+        if event["type"] == "approval_requested":
+            pending = event
+        elif event["type"] in ("approval_granted", "approval_denied"):
+            pending = None
+    return pending
+
+
+def decide_approval(storage, incident_id, approved, channel, approver, note=""):
+    """THE approval writer — both channels (web panel, SMS) come through here,
+    so first response wins and the §4 stream gets exactly one approval event.
+    Returns the appended event, or None when nothing is pending (race lost)."""
+    pending = find_pending_approval(storage, incident_id)
+    if pending is None:
+        return None
+    verb = "approved" if approved else "denied"
+    return storage.append_event(
+        incident_id, "human",
+        "approval_granted" if approved else "approval_denied",
+        {"summary": f"Human {verb} the risky action from the {channel} {'panel' if channel == 'web' else 'channel'}.",
+         "channel": channel,
+         "approver": approver,
+         "note": note,
+         "action": pending["payload"].get("action")},
+    )
+
+
+def pending_approvals(storage):
+    """Incident ids with an unanswered approval, across every pack."""
+    ids = []
+    for pack in storage.get_json("packs", ["it-ops"]):
+        for inc in storage.get_json(f"incidents:{pack}", []):
+            if find_pending_approval(storage, inc["id"]) is not None:
+                ids.append(inc["id"])
+    return ids
 
 
 class handler(BaseHTTPRequestHandler):
@@ -94,6 +136,9 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path, q = self._route()
         storage = Storage(self.context.agent.store)
+        if path == "/sms/inbound":
+            # Twilio posts form-encoded, not JSON — handled before _body().
+            return self._sms_inbound(storage)
         body = self._body()
         try:
             if path == "/incidents":
@@ -126,13 +171,14 @@ class handler(BaseHTTPRequestHandler):
                 return self._json(200, flags)
 
             if path == "/eval":
-                # Real scoring is Phase B2 (evaluation.py); no fake numbers before then.
-                return self._json(501, {"error": "eval runner lands in Phase B2"})
-
-            if path == "/stub/start":
-                return self._stub_start(storage, body)
-            if path == "/stub/tick":
-                return self._stub_tick(storage, body)
+                # Scoring runs on the /eval agent (needs the full pipeline);
+                # this endpoint only persists the summary it produced.
+                pack = body.get("pack")
+                summary = body.get("summary")
+                if not pack or not isinstance(summary, dict) or "aggregate" not in summary:
+                    return self._json(400, {"error": "pack and summary{aggregate,...} are required"})
+                storage.put_json(f"eval:{pack}", summary)
+                return self._json(200, summary)
 
             return self._json(404, {"error": f"no such route: POST {path}"})
         except Exception as e:
@@ -143,75 +189,59 @@ class handler(BaseHTTPRequestHandler):
         incident = body.get("incident_id")
         if not incident:
             return self._json(400, {"error": "incident_id is required"})
-        events = storage.read_events(incident)
-        pending = None
-        for event in events:
-            if event["type"] == "approval_requested":
-                pending = event
-            elif event["type"] in ("approval_granted", "approval_denied"):
-                pending = None
-        if pending is None:
-            return self._json(409, {"error": "no approval pending", "resolved": True})
-        approved = bool(body.get("approved"))
-        actor_note = body.get("note", "")
-        event = storage.append_event(
-            incident, "human",
-            "approval_granted" if approved else "approval_denied",
-            {"summary": ("Human approved the risky action from the web panel."
-                         if approved else "Human denied the risky action from the web panel."),
-             "channel": "web",
-             "approver": body.get("approver", "human-ui"),
-             "note": actor_note,
-             "action": pending["payload"].get("action")},
+        event = decide_approval(
+            storage, incident, bool(body.get("approved")),
+            channel="web", approver=body.get("approver", "human-ui"),
+            note=body.get("note", ""),
         )
+        if event is None:
+            return self._json(409, {"error": "no approval pending", "resolved": True})
         return self._json(200, event)
 
-    # -- STUB (sanctioned scaffold — DELETE AT INTEGRATION, Phase B3) -------
-    def _stub_start(self, storage, body):
-        incident = body.get("incident_id", "INC-001-checkout-db-pool")
-        storage.put_json(f"stub:{incident}", {"t0": time.time(), "appended": 0})
-        return self._json(200, {"incident_id": incident, "status": "replaying"})
+    # -- §6A inbound SMS (Twilio webhook) ------------------------------------
+    def _xml(self, status, body):
+        data = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/xml; charset=UTF-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
-    def _stub_tick(self, storage, body):
-        incident = body.get("incident_id", "INC-001-checkout-db-pool")
-        state = storage.get_json(f"stub:{incident}")
-        if not state:
-            return self._json(200, {"status": "idle"})
-        now = time.time()
-        appended = state["appended"]
-        new = 0
+    def _sms_inbound(self, storage):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length).decode("utf-8") if length > 0 else ""
+        params = {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
-        # phase 1: pre-approval events due by wall clock
-        while appended < len(PRE_APPROVAL):
-            offset, actor, event_type, payload = PRE_APPROVAL[appended]
-            if now - state["t0"] < offset:
-                break
-            storage.append_event(incident, actor, event_type, dict(payload))
-            appended += 1
-            new += 1
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+        webhook_url = os.getenv("SMS_WEBHOOK_URL", "")
+        if not auth_token:
+            return self._xml(503, twiml("SMS channel is not configured."))
+        if not validate_twilio_signature(
+            webhook_url, params, self.headers.get("X-Twilio-Signature", ""), auth_token
+        ):
+            print(f"sms/inbound REJECTED: bad signature from {params.get('From')!r}")
+            return self._xml(403, twiml("Rejected."))
+        sender = params.get("From", "")
+        if sender != os.getenv("ONCALL_PHONE_NUMBER", ""):
+            # Security floor: only the registered on-call number is an approver.
+            print(f"sms/inbound REJECTED: unregistered sender {sender!r}")
+            return self._xml(403, twiml("This number is not the registered on-call engineer."))
 
-        # phase 2: barrier — wait for the REAL approval endpoint's event
-        if appended >= len(PRE_APPROVAL):
-            events = storage.read_events(incident)
-            decision = next((e for e in events
-                             if e["type"] in ("approval_granted", "approval_denied")), None)
-            if decision is not None:
-                tail = POST_APPROVAL if decision["type"] == "approval_granted" else POST_DENIAL
-                if "t1" not in state:
-                    state["t1"] = now
-                done_tail = appended - len(PRE_APPROVAL)
-                while done_tail < len(tail):
-                    offset, actor, event_type, payload = tail[done_tail]
-                    if now - state["t1"] < offset:
-                        break
-                    storage.append_event(incident, actor, event_type, dict(payload))
-                    done_tail += 1
-                    appended += 1
-                    new += 1
-                if done_tail >= len(tail):
-                    storage.delete(f"stub:{incident}")
-                    return self._json(200, {"status": "complete", "appended_now": new})
+        approved, incident_id, reply = parse_reply(params.get("Body", ""), pending_approvals(storage))
+        if incident_id is None:
+            return self._xml(200, twiml(reply))
 
-        state["appended"] = appended
-        storage.put_json(f"stub:{incident}", state)
-        return self._json(200, {"status": "replaying", "appended_now": new})
+        storage.append_event(
+            incident_id, "human", "oncall_reply",
+            {"summary": f"On-call engineer replied {'YES' if approved else 'NO'} by SMS.",
+             "channel": "sms", "body": params.get("Body", "")},
+        )
+        # Same writer as the web panel — first response wins.
+        event = decide_approval(
+            storage, incident_id, approved, channel="sms", approver=sender,
+        )
+        if event is None:
+            return self._xml(200, twiml(f"{incident_id} was already resolved by another channel."))
+        verb = "approved" if approved else "denied"
+        return self._xml(200, twiml(f"Got it — {incident_id} {verb}. The run will resume."))
+

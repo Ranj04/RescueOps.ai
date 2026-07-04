@@ -1,0 +1,10 @@
+{
+  "accent": "#5cd6ff",
+  "racks": [
+    { "id": "logs", "label": "SIEM LOGS", "icon": "🛡" },
+    { "id": "metrics", "label": "EDR TELEMETRY", "icon": "🖥" },
+    { "id": "deploys", "label": "PATCH PIPELINE", "icon": "🧩" },
+    { "id": "cve", "label": "THREAT FEED · NVD/KEV", "icon": "☣" },
+    { "id": "gateway", "label": "MODEL GATEWAY", "icon": "🛰" }
+  ]
+}
