@@ -1,0 +1,15 @@
+{
+  "schema_note": "Reference safe/risky action classes for SOC remediation. Guidance for the Remediation agent; the risky[] class is what policy.json forces to the approval gate. Not executed directly — the pipeline simulates execution per ARCHITECTURE.",
+  "safe": [
+    "Isolate the affected asset from egress / quarantine on the network",
+    "Block the attacker source IP at the WAF/firewall",
+    "Force a vulnerability rescan to clear a stale finding",
+    "Raise monitoring sensitivity on the affected asset"
+  ],
+  "risky": [
+    "Roll the service to a patched build",
+    "Rebuild the host from a known-good image",
+    "Rotate credentials/certificates reachable from the compromised asset",
+    "Force a credential reset for affected users"
+  ]
+}

